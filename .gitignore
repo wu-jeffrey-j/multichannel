@@ -3,3 +3,4 @@ channel_urls*.txt
 cookies.txt
 *.csv
 *.log
+*.json

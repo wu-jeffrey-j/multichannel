@@ -21,6 +21,10 @@ echo "Activated conda environment: $(conda info --envs)"
 
 ulimit -n 50000
 
+apt-get update && apt-get install -y gcsfuse
+mkdir -p /mnt/cookies
+gcsfuse multichannel-podcasts /mnt/cookies
+
 # ----- Run your Python script -----
 cd /opt/jobs/
 

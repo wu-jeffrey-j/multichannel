@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script to upload MP3 files from un_recordings2 directory to Google Cloud Storage.
+Script to upload wav files from un_recordings2 directory to Google Cloud Storage.
 Preserves folder structure and uploads to bucket 'un_recordings' with prefix 'raw_audio'.
 Skips files that already exist on GCS. Uses multithreading for improved performance.
 Deletes local folders immediately when they become empty during upload.
@@ -103,26 +103,26 @@ def upload_single_file(args: Tuple[str, storage.Bucket, str, str, str, UploadCou
     Upload a single file to GCS. This function is designed to be thread-safe.
     
     Args:
-        args: Tuple containing (mp3_file, bucket, bucket_name, prefix, source_dir, counters)
+        args: Tuple containing (wav_file, bucket, bucket_name, prefix, source_dir, counters)
     """
-    mp3_file, bucket, bucket_name, prefix, source_dir, counters = args
+    wav_file, bucket, bucket_name, prefix, source_dir, counters = args
     
     try:
         # Get relative path from source directory to preserve folder structure
-        relative_path = os.path.relpath(mp3_file, source_dir)
+        relative_path = os.path.relpath(wav_file, source_dir)
         
         # Create GCS blob name with prefix
         blob_name = f"{prefix}/{relative_path}"
         
         # Track the folder this file belongs to
-        folder_path = os.path.dirname(mp3_file)
-        counters.add_file_to_folder(folder_path, mp3_file)
+        folder_path = os.path.dirname(wav_file)
+        counters.add_file_to_folder(folder_path, wav_file)
         
         # Check if blob already exists
         if blob_exists(bucket, blob_name):
-            logger.info(f"Skipped (already exists): {mp3_file} -> gs://{bucket_name}/{blob_name}")
+            logger.info(f"Skipped (already exists): {wav_file} -> gs://{bucket_name}/{blob_name}")
             # Delete the file
-            os.remove(mp3_file)
+            os.remove(wav_file)
             counters.increment_skipped()
         else:
             # Create blob and upload with timeout configuration
@@ -143,18 +143,17 @@ def upload_single_file(args: Tuple[str, storage.Bucket, str, str, str, UploadCou
             
             # Upload with retry configuration and longer timeout
             blob.upload_from_filename(
-                mp3_file,
+                wav_file,
                 timeout=300,  # 5 minutes timeout
                 retry=retry_config
             )
             
-            logger.info(f"Uploaded: {mp3_file} -> gs://{bucket_name}/{blob_name}")
-            os.remove(mp3_file)
+            logger.info(f"Uploaded: {wav_file} -> gs://{bucket_name}/{blob_name}")
+            os.remove(wav_file)
             counters.increment_uploaded()
-            
         
     except Exception as e:
-        logger.error(f"Failed to upload {mp3_file}: {e}")
+        logger.error(f"Failed to upload {wav_file}: {e}")
         counters.increment_failed()
 
 def delete_source_directory(source_dir: str):
@@ -173,9 +172,9 @@ def delete_source_directory(source_dir: str):
     except Exception as e:
         logger.error(f"Failed to delete source directory {source_dir}: {e}")
 
-def upload_to_gcs(max_workers: int = 1, delete_source: bool = False):
+def upload_to_gcs(max_workers: int = 5, delete_source: bool = False):
     """
-    Upload all MP3 files from un_recordings2 directory to Google Cloud Storage.
+    Upload all wav files from un_recordings2 directory to Google Cloud Storage.
     Preserves folder structure with bucket 'un_recordings' and prefix 'raw_audio'.
     Skips files that already exist on GCS. Uses multithreading for improved performance.
     Deletes local folders immediately when they become empty during upload.
@@ -188,7 +187,7 @@ def upload_to_gcs(max_workers: int = 1, delete_source: bool = False):
     # Configuration
     bucket_name = "multichannel-podcasts"
     prefix = "raw_audio"
-    source_dir = "podcasts"
+    source_dir = "../podcasts"
     
     # Initialize GCS client with timeout configuration
     try:
@@ -216,12 +215,12 @@ def upload_to_gcs(max_workers: int = 1, delete_source: bool = False):
         logger.error(f"Source directory '{source_dir}' does not exist")
         return
     
-    # Find all MP3 files recursively
-    mp3_files = glob.glob(os.path.join(source_dir, "**/*.mp3"), recursive=True)
-    logger.info(f"Found {len(mp3_files)} MP3 files to process")
+    # Find all wav files recursively
+    wav_files = glob.glob(os.path.join(source_dir, "**/*.wav"), recursive=True)
+    logger.info(f"Found {len(wav_files)} wav files to process")
     
-    if not mp3_files:
-        logger.warning("No MP3 files found in the source directory")
+    if not wav_files:
+        logger.warning("No wav files found in the source directory")
         return
     
     # Initialize thread-safe counters
@@ -229,8 +228,8 @@ def upload_to_gcs(max_workers: int = 1, delete_source: bool = False):
     
     # Prepare arguments for each file upload
     upload_args = [
-        (mp3_file, bucket, bucket_name, prefix, source_dir, counters)
-        for mp3_file in mp3_files
+        (wav_file, bucket, bucket_name, prefix, source_dir, counters)
+        for wav_file in wav_files
     ]
     
     logger.info(f"Starting upload with {max_workers} worker threads...")
@@ -239,7 +238,7 @@ def upload_to_gcs(max_workers: int = 1, delete_source: bool = False):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all upload tasks
         future_to_file = {
-            executor.submit(upload_single_file, args): args[0]  # args[0] is mp3_file
+            executor.submit(upload_single_file, args): args[0]  # args[0] is wav_file
             for args in upload_args
         }
         
@@ -264,7 +263,7 @@ def upload_to_gcs(max_workers: int = 1, delete_source: bool = False):
 
 def main():
     """Main function to run the upload process."""
-    logger.info("Starting MP3 upload to Google Cloud Storage...")
+    logger.info("Starting wav upload to Google Cloud Storage...")
     upload_to_gcs()
     logger.info("Upload process completed.")
 

@@ -14,7 +14,7 @@ fi
 # -------------------------------
 
 # Base name for VMs (e.g., ltk-hero-image)
-BASE_NAME="un-scraper"
+BASE_NAME="yt-scraper"
 
 # Number of VMs to create
 NUM_VMS=4
