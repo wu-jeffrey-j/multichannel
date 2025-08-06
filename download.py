@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+"""
+YouTube Download Script v2
+Downloads audio from YouTube channels using cookies-from-browser authentication.
+Simpler and more reliable than username/password authentication.
+"""
+
 import yt_dlp
 import os
 import concurrent.futures
@@ -9,25 +16,16 @@ import google.api_core.retry
 import google.api_core.client_options
 import threading
 from pathlib import Path
-import browser_cookie3
-from http.cookiejar import CookieJar
 
-# --- Configuration ---
-# A list of YouTube channel URLs to download from.
-# It's best to go to the channel's "Videos" tab and use that URL.
+# Configuration
 def get_channel_urls():
-    with open('channel_urls.txt', 'r') as f:
+    with open('/tmp/manifest.txt', 'r') as f:
         return [line.strip() for line in f.readlines()]
 
 CHANNEL_URLS = get_channel_urls()
 
-# Define where to save the downloaded audio files.
-# A subfolder with the channel's name will be created inside this directory.
-DOWNLOAD_DIRECTORY = 'podcasts'
-
-# Set the maximum number of concurrent downloads.
-# Be mindful of your network bandwidth and CPU usage.
-MAX_WORKERS = 5
+DOWNLOAD_DIRECTORY = "podcasts"
+MAX_WORKERS = 4
 
 # GCS Configuration
 GCS_BUCKET_NAME = "multichannel-podcasts"
@@ -38,7 +36,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('download.log'),
+        logging.FileHandler('download2.log'),
         logging.StreamHandler()
     ]
 )
@@ -48,52 +46,31 @@ logger = logging.getLogger(__name__)
 CSV_FILE = 'download_status.csv'
 CSV_HEADERS = ['timestamp', 'url', 'filename', 'status', 'duration_seconds', 'error_message']
 
-# Thread-safe counters
 class DownloadCounters:
+    """Thread-safe counters for download statistics."""
     def __init__(self):
         self.downloaded = 0
         self.uploaded = 0
         self.failed = 0
         self.lock = threading.Lock()
-    
+
     def increment_downloaded(self):
         with self.lock:
             self.downloaded += 1
-    
+
     def increment_uploaded(self):
         with self.lock:
             self.uploaded += 1
-    
+
     def increment_failed(self):
         with self.lock:
             self.failed += 1
 
-# ---------------------
-def export_firefox_cookies(domain='youtube.com', output_path='cookies.txt'):
-    # Load cookies from Firefox
-    cj = browser_cookie3.firefox(domain_name=domain)
-    # Save to Netscape format
-    with open(output_path, 'w') as f:
-        f.write('# Netscape HTTP Cookie File\n')
-        for cookie in cj:
-            if domain in cookie.domain:
-                # Domain, include_subdomains, path, secure, expiry, name, value
-                domain_field = cookie.domain
-                include_subdomains = 'TRUE' if cookie.domain.startswith('.') else 'FALSE'
-                path = cookie.path
-                secure = 'TRUE' if cookie.secure else 'FALSE'
-                expiry = str(int(cookie.expires)) if cookie.expires else '0'
-                f.write(f"{domain_field}\t{include_subdomains}\t{path}\t{secure}\t{expiry}\t{cookie.name}\t{cookie.value}\n")
-    return output_path
-
 def write_csv_entry(url, filename, status, duration_seconds, error_message=""):
-    """
-    Writes a download status entry to the CSV file.
-    """
+    """Writes a download status entry to the CSV file."""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     row = [timestamp, url, filename, status, duration_seconds, error_message]
     
-    # Create file with headers if it doesn't exist
     file_exists = os.path.exists(CSV_FILE)
     
     with open(CSV_FILE, 'a', newline='', encoding='utf-8') as csvfile:
@@ -103,17 +80,12 @@ def write_csv_entry(url, filename, status, duration_seconds, error_message=""):
         writer.writerow(row)
 
 def initialize_gcs_client():
-    """
-    Initialize Google Cloud Storage client with timeout configuration.
-    """
+    """Initialize Google Cloud Storage client with timeout configuration."""
     try:
-        # Configure the client with custom timeout settings
         client_options = google.api_core.client_options.ClientOptions(
             api_endpoint="https://storage.googleapis.com",
             api_audience="https://storage.googleapis.com"
         )
-        
-        # Create client with timeout configuration
         storage_client = storage.Client(client_options=client_options)
         bucket = storage_client.bucket(GCS_BUCKET_NAME)
         logger.info(f"✅ Connected to GCS bucket: {GCS_BUCKET_NAME}")
@@ -123,22 +95,12 @@ def initialize_gcs_client():
         return None, None
 
 def blob_exists(bucket, blob_name):
-    """
-    Check if a blob already exists in the bucket with timeout configuration.
-    
-    Args:
-        bucket: GCS bucket object
-        blob_name: Name of the blob to check
-        
-    Returns:
-        bool: True if blob exists, False otherwise
-    """
+    """Check if a blob already exists in the bucket with timeout configuration."""
     if not bucket:
         return False
         
     blob = bucket.blob(blob_name)
     
-    # Configure timeout for existence check
     retry_config = google.api_core.retry.Retry(
         initial=1.0,
         maximum=30.0,
@@ -151,39 +113,25 @@ def blob_exists(bucket, blob_name):
     )
     
     try:
-        return blob.exists(timeout=60, retry=retry_config)  # 1 minute timeout
+        return blob.exists(timeout=60, retry=retry_config)
     except Exception as e:
         logger.warning(f"⚠️ Error checking if blob exists {blob_name}: {e}")
-        return False  # Assume it doesn't exist if we can't check
+        return False
 
 def upload_audio_to_gcs(bucket, audio_file, relative_path):
-    """
-    Upload an audio file to GCS with timeout and retry configuration.
-    
-    Args:
-        bucket: GCS bucket object
-        audio_file: Path to the audio file
-        relative_path: Relative path for the blob name
-        
-    Returns:
-        bool: True if upload successful, False otherwise
-    """
+    """Upload an audio file to GCS with timeout and retry configuration."""
     if not bucket:
         return False
         
     try:
-        # Create GCS blob name with prefix
         blob_name = f"{GCS_PREFIX}/{relative_path}"
         
-        # Check if blob already exists
         if blob_exists(bucket, blob_name):
             logger.info(f"⏭️ Skipped (already exists): {audio_file} -> gs://{GCS_BUCKET_NAME}/{blob_name}")
             return True
         
-        # Create blob and upload with timeout configuration
         blob = bucket.blob(blob_name)
         
-        # Configure upload with longer timeout
         retry_config = google.api_core.retry.Retry(
             initial=1.0,
             maximum=60.0,
@@ -195,10 +143,9 @@ def upload_audio_to_gcs(bucket, audio_file, relative_path):
             ),
         )
         
-        # Upload with retry configuration and longer timeout
         blob.upload_from_filename(
             audio_file,
-            timeout=300,  # 5 minutes timeout
+            timeout=300,
             retry=retry_config
         )
         
@@ -210,15 +157,12 @@ def upload_audio_to_gcs(bucket, audio_file, relative_path):
         return False
 
 def get_video_urls(channel_url):
-    """
-    Extracts all video URLs from a YouTube channel playlist.
-    """
+    """Extract all video URLs from a YouTube channel playlist using cookies-from-browser."""
     logger.info(f"🔍 Fetching video list from: {channel_url}")
     start_time = datetime.now()
     
-    # We use 'extract_flat' to quickly get video URLs without full metadata
     ydl_opts = {
-        'cookiefile': 'cookies.txt',
+        'cookiesfrombrowser': ('firefox',),  # Use Firefox cookies
         'extract_flat': 'in_playlist',
         'quiet': True,
     }
@@ -229,57 +173,47 @@ def get_video_urls(channel_url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info_dict = ydl.extract_info(channel_url, download=False)
                 if 'entries' in info_dict:
-                    # We need the full URL for yt-dlp to process in the next step
                     urls = [entry['url'] for entry in info_dict['entries'] if entry]
                     duration = datetime.now() - start_time
                     logger.info(f"✅ Found {len(urls)} videos from {channel_url} in {duration.total_seconds():.2f}s")
                     return urls
                 else:
-                    logger.warning(f"⚠️  No video entries found for {channel_url}")
+                    logger.warning(f"⚠️ No video entries found for {channel_url}")
                     return []
                     
         except Exception as e:
             error_message = str(e).lower()
             
-            # Check if it's a cookie expiration error
-            if any(keyword in error_message for keyword in ['cookie', 'expired', 'authentication', 'login']):
-                logger.error(f"❌ Cookie expiration detected on attempt {attempt + 1} for {channel_url}")
-                
-                if attempt < max_retries - 1:  # Don't refresh cookies on the last attempt
-                    try:
-                        logger.info(f"🔄 Refreshing cookies from Firefox...")
-                        export_firefox_cookies()
-                        logger.info(f"✅ Cookies refreshed, retrying video list fetch...")
-                        continue  # Retry with fresh cookies
-                    except Exception as cookie_error:
-                        logger.error(f"❌ Failed to refresh cookies: {cookie_error}")
-                        # Continue with existing cookies
-            else:
-                logger.error(f"❌ Could not extract video list for {channel_url} (attempt {attempt + 1}): {e}")
+            # Check for authentication errors
+            if any(keyword in error_message for keyword in ['authentication', 'login', 'cookie', 'expired']):
+                logger.error(f"❌ Authentication failed for {channel_url}: {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"🔄 Retrying authentication (attempt {attempt + 2}/{max_retries})...")
+                    continue
+                else:
+                    logger.error("❌ Max authentication retries reached")
+                    return []
             
-            if attempt == max_retries - 1:  # Last attempt
+            logger.error(f"❌ Could not extract video list for {channel_url} (attempt {attempt + 1}): {e}")
+            
+            if attempt == max_retries - 1:
                 return []
     
     return []
 
 def download_and_upload_video_audio(video_url, download_path, bucket):
-    """
-    Downloads audio from a single video URL and uploads it to GCS.
-    This function is executed by each thread.
-    """
+    """Downloads audio from a single video URL and uploads it to GCS."""
     logger.info(f"🎵 Starting download and upload: {video_url}")
     start_time = datetime.now()
 
     ydl_opts = {
-        'cookiefile': 'cookies.txt',
-        'format': 'bestaudio[ext=m4a]/bestaudio',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'wav',
-            'preferredquality': '192',
-        }],
+        'cookiesfrombrowser': ('firefox',),
+        'format': 'bestaudio[ext=wav]/bestaudio',
+        'postprocessors': [],
+        'postprocessor_args': [],
         'ignoreerrors': True,
         'outtmpl': os.path.join(download_path, '%(uploader)s/%(title)s.%(ext)s'),
+        'prefer_ffmpeg': False,
         'quiet': True,
     }
 
@@ -347,20 +281,18 @@ def download_and_upload_video_audio(video_url, download_path, bucket):
         except Exception as e:
             error_message = str(e).lower()
             
-            # Check if it's a cookie expiration error
-            if any(keyword in error_message for keyword in ['cookie', 'expired', 'authentication', 'login']):
-                logger.error(f"❌ Cookie expiration detected on attempt {attempt + 1} for {video_url}")
-                
-                if attempt < max_retries - 1:  # Don't refresh cookies on the last attempt
-                    try:
-                        logger.info(f"🔄 Refreshing cookies from Firefox...")
-                        export_firefox_cookies()
-                        logger.info(f"✅ Cookies refreshed, retrying download...")
-                        continue  # Retry with fresh cookies
-                    except Exception as cookie_error:
-                        logger.error(f"❌ Failed to refresh cookies: {cookie_error}")
-                        # Continue with existing cookies
-                
+            # Check for authentication errors
+            if any(keyword in error_message for keyword in ['authentication', 'login', 'password', 'username', 'credentials']):
+                logger.error(f"❌ Authentication failed for {video_url}: {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"🔄 Retrying authentication (attempt {attempt + 2}/{max_retries})...")
+                    continue
+                else:
+                    logger.error("❌ Max authentication retries reached")
+                    duration = datetime.now() - start_time
+                    write_csv_entry(video_url, "unknown", "AUTH_FAILED", duration.total_seconds(), str(e))
+                    return False, False
+            
             duration = datetime.now() - start_time
             logger.error(f"❌ Failed to download {video_url} after {duration.total_seconds():.2f}s (attempt {attempt + 1}): {e}")
             
@@ -370,66 +302,88 @@ def download_and_upload_video_audio(video_url, download_path, bucket):
     
     return False, False  # download failed
 
-def download_channel_audio_parallel(channel_url, download_path, max_workers, bucket=None):
-    """
-    Downloads all audio from a YouTube channel using multiple threads and uploads to GCS.
-    """
-    logger.info(f"🚀 Starting channel download: {channel_url}")
-    channel_start_time = datetime.now()
+def download_channel_audio_parallel(channel_url, download_path, max_workers, bucket):
+    """Downloads audio from all videos in a channel using parallel processing."""
+    logger.info(f"🎬 Starting parallel download for channel: {channel_url}")
     
+    # Get video URLs
     video_urls = get_video_urls(channel_url)
+    
     if not video_urls:
-        logger.error(f"No videos found for {channel_url} or failed to fetch video list.")
-        return
-
-    logger.info(f"📊 Found {len(video_urls)} videos for {channel_url}. Starting download with {max_workers} workers.")
-
-    # Ensure the main download directory exists
-    if not os.path.exists(download_path):
-        os.makedirs(download_path)
-        logger.info(f"📁 Created download directory: {download_path}")
-
+        logger.warning(f"⚠️ No videos found for channel: {channel_url}")
+        return 0, 0, 0
+    
+    logger.info(f"📊 Found {len(video_urls)} videos to download")
+    
+    # Initialize counters
     successful_downloads = 0
     successful_uploads = 0
     failed_downloads = 0
     
+    # Use ThreadPoolExecutor for parallel downloads
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all download tasks to the thread pool and collect results
-        future_to_url = {executor.submit(download_and_upload_video_audio, url, download_path, bucket): url for url in video_urls}
+        # Submit all download tasks
+        future_to_url = {
+            executor.submit(download_and_upload_video_audio, url, download_path, bucket): url
+            for url in video_urls
+        }
         
+        # Process completed downloads
         for future in concurrent.futures.as_completed(future_to_url):
             url = future_to_url[future]
             try:
                 download_success, upload_success = future.result()
+                
                 if download_success:
                     successful_downloads += 1
                     if upload_success:
                         successful_uploads += 1
                 else:
                     failed_downloads += 1
-            except Exception as e:
-                logger.error(f"❌ Unexpected error for {url}: {e}")
+                    
+            except Exception as exc:
+                logger.error(f"❌ {url} generated an exception: {exc}")
                 failed_downloads += 1
+    
+    logger.info(f"🏁 Channel download completed: {channel_url}")
+    logger.info(f"📊 Summary: {successful_downloads} successful downloads, {successful_uploads} successful uploads, {failed_downloads} failed")
+    
+    return successful_downloads, successful_uploads, failed_downloads
 
-    channel_duration = datetime.now() - channel_start_time
-    logger.info(f"🏁 Channel download completed for {channel_url}")
-    logger.info(f"📈 Summary: {successful_downloads} successful downloads, {successful_uploads} successful uploads, {failed_downloads} failed")
-    logger.info(f"⏱️  Total time: {channel_duration.total_seconds():.2f}s")
-
-if __name__ == '__main__':
-    logger.info("🎬 Starting YouTube channel audio downloader with GCS upload")
-    total_start_time = datetime.now()
+def main():
+    """Main function to run the download process."""
+    logger.info("🎬 Starting YouTube download script v2 (cookies-from-browser)")
     
     # Initialize GCS client
     storage_client, bucket = initialize_gcs_client()
     if not bucket:
         logger.warning("⚠️ GCS not available, will only download files locally")
     
-    for url in CHANNEL_URLS:
-        if 'youtube.com' not in url:
-            logger.error(f"'{url}' is not a valid YouTube URL. Please check the CHANNEL_URLS list.")
-        else:
-            download_channel_audio_parallel(url, DOWNLOAD_DIRECTORY, MAX_WORKERS, bucket)
+    # Create download directory
+    os.makedirs(DOWNLOAD_DIRECTORY, exist_ok=True)
     
-    total_duration = datetime.now() - total_start_time
-    logger.info(f"🎉 All channel downloads completed in {total_duration.total_seconds():.2f}s")
+    # Process each channel
+    total_downloads = 0
+    total_uploads = 0
+    total_failed = 0
+    
+    for channel_url in CHANNEL_URLS:
+        logger.info(f"🎬 Processing channel: {channel_url}")
+        
+        downloads, uploads, failed = download_channel_audio_parallel(
+            channel_url, DOWNLOAD_DIRECTORY, MAX_WORKERS, bucket
+        )
+        
+        total_downloads += downloads
+        total_uploads += uploads
+        total_failed += failed
+    
+    # Final summary
+    logger.info("🎉 Download process completed!")
+    logger.info(f"📊 Final Summary:")
+    logger.info(f"   Total downloads: {total_downloads}")
+    logger.info(f"   Total uploads: {total_uploads}")
+    logger.info(f"   Total failed: {total_failed}")
+
+if __name__ == '__main__':
+    main() 

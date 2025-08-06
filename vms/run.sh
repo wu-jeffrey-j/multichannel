@@ -26,7 +26,7 @@ ZONE="us-west1-b"
 MACHINE_TYPE=n2-standard-4
 
 # Custom image to boot from
-IMAGE="scraper-image"
+IMAGE="scraper-image2"
 
 # Startup script file (local path)
 STARTUP_SCRIPT="startup.sh"
@@ -48,7 +48,7 @@ for i in $(seq 1 $NUM_VMS); do
     --boot-disk-size=300GB \
     --metadata-from-file=startup-script="$STARTUP_SCRIPT" \
     --scopes=storage-full \
-    --tags=un-scrapers \
+    --tags=yt-scrapers \
     --quiet &
 done
 
