@@ -36,7 +36,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('download2.log'),
+        logging.FileHandler('download.log'),
         logging.StreamHandler()
     ]
 )
@@ -209,7 +209,13 @@ def download_and_upload_video_audio(video_url, download_path, bucket):
     ydl_opts = {
         'cookiesfrombrowser': ('firefox',),
         'format': 'bestaudio[ext=wav]/bestaudio',
-        'postprocessors': [],
+        'postprocessors': [
+            {
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'wav',
+                'preferredquality': '192',
+            }
+        ],
         'postprocessor_args': [],
         'ignoreerrors': True,
         'outtmpl': os.path.join(download_path, '%(uploader)s/%(title)s.%(ext)s'),
