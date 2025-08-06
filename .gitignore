@@ -4,3 +4,4 @@ cookies.txt
 *.csv
 *.log
 *.json
+.DS_Store
